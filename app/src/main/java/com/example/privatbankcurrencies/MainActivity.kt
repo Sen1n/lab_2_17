@@ -13,10 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -42,10 +40,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.work.WorkInfo
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -53,7 +51,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                ExchangeRatesScreen()
+                ExchangeArchiveScreen()
             }
         }
     }
@@ -61,17 +59,18 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExchangeRatesScreen(
-    viewModel: ExchangeRatesViewModel = viewModel()
+fun ExchangeArchiveScreen(
+    viewModel: ExchangeArchiveViewModel = viewModel()
 ) {
     val selectedDate by viewModel.selectedDate.collectAsStateWithLifecycle()
-    val rates by viewModel.rates.collectAsStateWithLifecycle()
-    val savedDates by viewModel.savedDates.collectAsStateWithLifecycle()
-    val workInfo by viewModel.currentWorkInfo.collectAsStateWithLifecycle()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val sortAlphabetically by viewModel.sortAlphabetically.collectAsStateWithLifecycle()
 
+    val isLoading = uiState is ExchangeArchiveUiState.Loading
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
 
-    if (showDatePicker) {
+    if (showDatePicker && !isLoading) {
         val initialMillis = DateUtils.dateStringToMillis(selectedDate)
         val datePickerState = rememberDatePickerState(
             initialSelectedDateMillis = initialMillis
@@ -83,7 +82,7 @@ fun ExchangeRatesScreen(
                 TextButton(
                     onClick = {
                         datePickerState.selectedDateMillis?.let { millis ->
-                            viewModel.selectDate(DateUtils.millisToDateString(millis))
+                            viewModel.onDateChanged(DateUtils.millisToDateString(millis))
                         }
                         showDatePicker = false
                     }
@@ -116,7 +115,7 @@ fun ExchangeRatesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -124,181 +123,173 @@ fun ExchangeRatesScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                OutlinedTextField(
+                    value = selectedDate,
+                    onValueChange = { viewModel.onDateChanged(it) },
+                    label = { Text("Дата (дд.мм.рррр)") },
+                    singleLine = true,
+                    enabled = !isLoading,
+                    modifier = Modifier.weight(1f)
+                )
+
                 OutlinedButton(
                     onClick = { showDatePicker = true },
-                    modifier = Modifier.weight(1f)
+                    enabled = !isLoading
                 ) {
-                    Text("Дата: $selectedDate")
-                }
-
-                Button(
-                    onClick = { viewModel.refreshSelectedDate() },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Оновити")
+                    Text("Календар")
                 }
             }
 
-            if (savedDates.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "Збережені дати у базі:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Button(
+                onClick = { viewModel.loadRates() },
+                enabled = !isLoading,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Показати курси")
+            }
+
+            when (val state = uiState) {
+                ExchangeArchiveUiState.Initial -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
                     ) {
-                        items(
-                            items = savedDates,
-                            key = { it }
-                        ) { date ->
-                            FilterChip(
-                                selected = date == selectedDate,
-                                onClick = { viewModel.selectDate(date) },
-                                label = { Text(date) }
+                        Text(
+                            text = "Оберіть дату та натисніть «Показати курси»",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+
+                ExchangeArchiveUiState.Loading -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator()
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text("Завантаження курсів...")
+                        }
+                    }
+                }
+
+                is ExchangeArchiveUiState.Error -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = state.message,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyLarge,
+                                textAlign = TextAlign.Center
                             )
+                            Button(onClick = { viewModel.loadRates() }) {
+                                Text("Повторити запит")
+                            }
+                        }
+                    }
+                }
+
+                is ExchangeArchiveUiState.Success -> {
+                    Text(
+                        text = "Курси валют станом на ${state.responseDate}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    if (state.allRates.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "За обрану дату дані про курси відсутні.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { viewModel.onSearchQueryChanged(it) },
+                                label = { Text("Пошук валюти (USD, EUR...)") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            FilterChip(
+                                selected = sortAlphabetically,
+                                onClick = { viewModel.onToggleSort() },
+                                label = { Text("А–Я") }
+                            )
+                        }
+
+                        if (state.displayedRates.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "За запитом «$searchQuery» валют не знайдено",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                contentPadding = PaddingValues(vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(
+                                    items = state.displayedRates,
+                                    key = { it.currency.orEmpty() }
+                                ) { rate ->
+                                    ArchiveRateCard(rate = rate)
+                                }
+                            }
                         }
                     }
                 }
             }
-
-            WorkStatusBanner(
-                workInfo = workInfo,
-                hasCachedRates = rates.isNotEmpty()
-            )
-
-            if (rates.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Курси за цю дату ще не завантажені",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(
-                        items = rates,
-                        key = { "${it.date}_${it.currency}" }
-                    ) { rate ->
-                        ExchangeRateCard(rate = rate)
-                    }
-                }
-            }
         }
     }
 }
 
 @Composable
-private fun WorkStatusBanner(
-    workInfo: WorkInfo?,
-    hasCachedRates: Boolean
-) {
-    if (workInfo == null) return
-
-    val statusText: String?
-    val isInProgress: Boolean
-    val isError: Boolean
-
-    when (workInfo.state) {
-        WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> {
-            statusText = "Очікує мережі / запуску"
-            isInProgress = true
-            isError = false
-        }
-        WorkInfo.State.RUNNING -> {
-            statusText = "Оновлюється..."
-            isInProgress = true
-            isError = false
-        }
-        WorkInfo.State.SUCCEEDED -> {
-            val message = workInfo.outputData.getString(ExchangeRatesSyncWorker.KEY_MESSAGE)
-            val isEmptyResponse = workInfo.outputData.getBoolean(
-                ExchangeRatesSyncWorker.KEY_EMPTY_RESPONSE,
-                false
-            )
-            statusText = when {
-                isEmptyResponse && hasCachedRates -> "$message (показано раніше збережені курси)"
-                !message.isNullOrBlank() -> message
-                else -> null
-            }
-            isInProgress = false
-            isError = isEmptyResponse
-        }
-        WorkInfo.State.FAILED -> {
-            val errorMessage = workInfo.outputData.getString(ExchangeRatesSyncWorker.KEY_MESSAGE)
-                ?: "Помилка оновлення"
-            statusText = if (hasCachedRates) {
-                "$errorMessage (показано раніше збережені курси)"
-            } else {
-                errorMessage
-            }
-            isInProgress = false
-            isError = true
-        }
-        WorkInfo.State.CANCELLED -> {
-            statusText = null
-            isInProgress = false
-            isError = false
-        }
-    }
-
-    if (statusText != null) {
-        val containerColor = if (isError) {
-            MaterialTheme.colorScheme.errorContainer
-        } else {
-            MaterialTheme.colorScheme.secondaryContainer
-        }
-        val contentColor = if (isError) {
-            MaterialTheme.colorScheme.onErrorContainer
-        } else {
-            MaterialTheme.colorScheme.onSecondaryContainer
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = containerColor)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isInProgress) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = contentColor
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                }
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = contentColor
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ExchangeRateCard(rate: ExchangeRateEntity) {
-    val purchaseText = rate.purchaseRate?.let { String.format(Locale.US, "%.2f", it) } ?: "—"
-    val saleText = rate.saleRate?.let { String.format(Locale.US, "%.2f", it) } ?: "—"
+private fun ArchiveRateCard(rate: ExchangeRateDto) {
+    val currency = rate.currency.orEmpty()
+    val baseCurrency = rate.baseCurrency?.takeIf { it.isNotBlank() } ?: "UAH"
+    val purchaseText = rate.purchaseRate?.let {
+        "${String.format(Locale.US, "%.2f", it)} $baseCurrency"
+    } ?: "—"
+    val saleText = rate.saleRate?.let {
+        "${String.format(Locale.US, "%.2f", it)} $baseCurrency"
+    } ?: "—"
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -315,22 +306,16 @@ private fun ExchangeRateCard(rate: ExchangeRateEntity) {
         ) {
             Column {
                 Text(
-                    text = "${rate.currency} / ${rate.baseCurrency}",
+                    text = "$currency / $baseCurrency",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = rate.date,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "Купівля",
+                        text = "Банк купує",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -343,7 +328,7 @@ private fun ExchangeRateCard(rate: ExchangeRateEntity) {
 
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = "Продаж",
+                        text = "Банк продає",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
